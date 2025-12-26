@@ -13,6 +13,7 @@ const jwt = require('jsonwebtoken');
 const Razorpay = require('razorpay');
 const Feedback = require('./models/feedback');
 const Coupon = require('./models/coupan');
+const axios = require('axios')
 dotenv.config();
 const crypto = require('crypto');
 
@@ -25,13 +26,13 @@ const Product = mongoose.model("Product", productSchema, "products");
 connectDB()
 
 app.use(express.json())
-app.use(express.urlencoded({extended:true}))
+app.use(express.urlencoded({ extended: true }))
 app.use(cors({
-  origin: 'https://meltedmeethas.com',  
-  credentials: true                
+  origin: 'http://localhost:5173',
+  credentials: true
 }));
 
-const JWT_SECRET =  process.env.JWT_SECRET;
+const JWT_SECRET = process.env.JWT_SECRET;
 
 app.post('/signup', async (req, res) => {
   const { name, email, password } = req.body;
@@ -52,7 +53,7 @@ app.post('/signup', async (req, res) => {
 
 
     const token = jwt.sign({ id: newUser._id, email: newUser.email }, JWT_SECRET, {
-      expiresIn: '7d', 
+      expiresIn: '7d',
     });
 
     res.status(201).json({
@@ -141,7 +142,7 @@ app.get("/products", async (req, res) => {
 app.get("/categories", async (req, res) => {
   try {
     const siteInfo = await mongoose.connection.db
-      .collection("siteinfos") 
+      .collection("siteinfos")
       .findOne({});
 
     if (!siteInfo || !siteInfo.categories) {
@@ -168,7 +169,7 @@ const authMiddleware = async (req, res, next) => {
       return res.status(401).json({ error: "User not found" });
     }
 
-    req.user = user; 
+    req.user = user;
     next();
   } catch (err) {
     res.status(401).json({ error: "Token is not valid" });
@@ -181,7 +182,7 @@ app.post("/cart/add", authMiddleware, async (req, res) => {
 
     const quantityNum = parseInt(quantity) || 1;
 
- 
+
     const existingItem = user.cart.find(
       (item) => item.product && item.product.toString() === productId.toString()
     );
@@ -190,7 +191,7 @@ app.post("/cart/add", authMiddleware, async (req, res) => {
 
       existingItem.quantity += quantityNum;
     } else {
-   
+
       user.cart.push({ product: productId, quantity: quantityNum });
     }
 
@@ -275,39 +276,48 @@ app.delete("/cart/:productId", authMiddleware, async (req, res) => {
 
 
 
+
 app.post("/send-otp", async (req, res) => {
   const { email } = req.body;
   if (!email) return res.status(400).json({ error: "Email required" });
 
   const otp = Math.floor(100000 + Math.random() * 900000).toString();
-  const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 min expiry
+  const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 min
 
   try {
+    // Save OTP
     await Otp.findOneAndUpdate(
       { email },
       { otp, expiresAt },
       { upsert: true, new: true }
     );
 
-    const transporter = nodemailer.createTransport({
-      service: "gmail",
-      auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS },
-    });
+    // Send email via Brevo API
+    await axios.post(
+      "https://api.brevo.com/v3/smtp/email",
+      {
+        sender: {
+          name: "Melted Meethas",
+          email: "meltedmeethas@gmail.com", // MUST be verified in Brevo
+        },
+        to: [{ email }],
+        subject: "Your Melted Meethas Signup OTP",
+        textContent: `Your OTP is ${otp}. It will expire in 5 minutes.`,
+      },
+      {
+        headers: {
+          "api-key": process.env.BREVO_API,
+          "Content-Type": "application/json",
+        },
+      }
+    );
 
-    await transporter.sendMail({
-      from: `"MM TEAM" <${process.env.EMAIL_USER}>`,
-      to: email,
-      subject: "Your Melted Meethas Signup OTP",
-      text: `Your OTP is ${otp}. It will expire in 5 minutes.`,
-    });
-
-    res.json({ message: "OTP sent successfully" });
+    res.json({ success: true, message: "OTP sent successfully" });
   } catch (err) {
-    console.error(err);
+    console.error("❌ OTP ERROR:", err.response?.data || err.message);
     res.status(500).json({ error: "Failed to send OTP" });
   }
 });
-
 app.post("/verify-otp", async (req, res) => {
   const { email, otp } = req.body;
   if (!email || !otp) return res.status(400).json({ error: "Email & OTP required" });
@@ -328,7 +338,7 @@ app.post("/verify-otp", async (req, res) => {
 
 app.get("/me", authMiddleware, async (req, res) => {
   try {
-    const u = await User.findById(req.user._id) 
+    const u = await User.findById(req.user._id)
       .populate("cart.product", "title price discountPrice")
       .populate("pendingOrders.items.productId", "title price discountPrice")
       .populate("deliveredOrders.items.productId", "title price discountPrice");
@@ -346,7 +356,7 @@ app.get("/me", authMiddleware, async (req, res) => {
       pincode: u.pincode,
       createdAt: u.createdAt,
 
-   
+
       cart: u.cart.map((c) => ({
         id: c._id,
         name: c.product?.title || "Unknown",
@@ -364,7 +374,7 @@ app.get("/me", authMiddleware, async (req, res) => {
         })),
       })),
 
-    
+
       previousOrders: u.deliveredOrders.map((order) => ({
         orderId: order._id.toString(),
         date: new Date(order.deliveredAt || order.createdAt || Date.now()).toLocaleDateString(),
@@ -403,51 +413,91 @@ app.delete("/delete", async (req, res) => {
 
 
 app.post("/forgot-password", async (req, res) => {
-  const { email } = req.body;
-  const user = await User.findOne({ email });
-  if (!user) return res.status(400).json({ error: "User not found" });
+  try {
+    const { email } = req.body;
 
-  const otp = Math.floor(100000 + Math.random() * 900000).toString();
-  const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes
-  await Otp.findOneAndUpdate({ email }, { otp, expiresAt }, { upsert: true });
+    if (!email)
+      return res.status(400).json({ error: "Email is required" });
 
-  const transporter = nodemailer.createTransport({
-      service: "gmail",
-      auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS },
-    });
+    const user = await User.findOne({ email });
+    if (!user)
+      return res.status(400).json({ error: "User not found" });
 
-  await transporter.sendMail({
-    from: `"MM Team" <${process.env.EMAIL_USER}>`,
-    to: email,
-    subject: "Your OTP",
-    text: `Your OTP for Password reset is ${otp} and will expire in 5 minutes`,
-  });
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 min
+
+    await Otp.findOneAndUpdate(
+      { email },
+      { otp, expiresAt },
+      { upsert: true, new: true }
+    );
+
+    await axios.post(
+      "https://api.brevo.com/v3/smtp/email",
+      {
+        sender: {
+          name: "MM Team",
+          email: "meltedmeethas@gmail.com", // VERIFIED in Brevo
+        },
+        to: [{ email }],
+        subject: "Your Password Reset OTP",
+        textContent: `Your OTP for password reset is ${otp}. It will expire in 5 minutes.`,
+      },
+      {
+        headers: {
+          "api-key": process.env.BREVO_API,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    res.json({ success: true, message: "OTP sent successfully" });
+  } catch (err) {
+    console.error("❌ FORGOT PASSWORD ERROR:", err.response?.data || err.message);
+    res.status(500).json({ error: "Failed to send OTP" });
+  }
+});
 app.post("/reset-password", async (req, res) => {
-  const { email, newPassword } = req.body;
+  const { email, otp, newPassword } = req.body;
 
-  if (!email || !newPassword) {
-    return res.status(400).json({ message: "Email and new password are required" });
+  if (!email || !otp || !newPassword) {
+    return res
+      .status(400)
+      .json({ message: "Email, OTP, and new password are required" });
   }
 
   try {
     const user = await User.findOne({ email });
-    if (!user) return res.status(404).json({ message: "User not found" });
+    if (!user)
+      return res.status(404).json({ message: "User not found" });
 
-  
+    const otpRecord = await Otp.findOne({ email });
+
+    if (!otpRecord)
+      return res.status(400).json({ message: "OTP not found" });
+
+    if (otpRecord.expiresAt < new Date())
+      return res.status(400).json({ message: "OTP expired" });
+
+    if (otpRecord.otp !== otp)
+      return res.status(400).json({ message: "Invalid OTP" });
+
     const salt = await bcrypt.genSalt(10);
     user.password = await bcrypt.hash(newPassword, salt);
-
     await user.save();
-    res.json({ message: "Password reset successfully" });
+
+    // Delete OTP after successful reset
+    await Otp.deleteOne({ email });
+
+    res.json({ success: true, message: "Password reset successfully" });
   } catch (err) {
-    console.error(err);
+    console.error("❌ RESET PASSWORD ERROR:", err);
     res.status(500).json({ message: "Server error" });
   }
 });
-  res.json({ message: "OTP sent" });
-});
-app.get('/',function(req,res){
-    res.send("working");
+
+app.get('/', function (req, res) {
+  res.send("working");
 
 })
 
@@ -562,8 +612,8 @@ app.post("/verify-payment", authMiddleware, async (req, res) => {
 
 
 
-app.delete("/clear-cart",authMiddleware,   async (req, res) => {
-  const userId = req.user._id; 
+app.delete("/clear-cart", authMiddleware, async (req, res) => {
+  const userId = req.user._id;
 
   try {
     const user = await User.findById(userId);
@@ -689,7 +739,7 @@ app.put("/update-address", authMiddleware, async (req, res) => {
 });
 
 app.put("/update", authMiddleware, async (req, res) => {
-  const { name} = req.body;
+  const { name } = req.body;
 
   const user = await User.findByIdAndUpdate(
     req.user._id,
