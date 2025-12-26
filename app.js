@@ -275,33 +275,29 @@ app.delete("/cart/:productId", authMiddleware, async (req, res) => {
 
 
 
-
 app.post("/send-otp", async (req, res) => {
   const { email } = req.body;
   if (!email) return res.status(400).json({ error: "Email required" });
 
   const otp = Math.floor(100000 + Math.random() * 900000).toString();
-  const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+  const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 min expiry
 
   try {
     await Otp.findOneAndUpdate(
       { email },
       { otp, expiresAt },
-      { upsert: true }
+      { upsert: true, new: true }
     );
-  const transporter = nodemailer.createTransport({
-  host: "smtp-relay.brevo.com",
-  port: 587,
-  secure: false, // TLS
-  auth: {
-    user: process.env.BREVO_SMTP_USER, // "apikey"
-    pass: process.env.BREVO_SMTP_PASS,
-  },
-});
+
+    const transporter = nodemailer.createTransport({
+      service: "gmail",
+      auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS },
+    });
+
     await transporter.sendMail({
-      from: `"MM TEAM" <${process.env.EMAIL_FROM}>`,
+      from: `"MM TEAM" <${process.env.EMAIL_USER}>`,
       to: email,
-      subject: "Your Signup OTP",
+      subject: "Your Melted Meethas Signup OTP",
       text: `Your OTP is ${otp}. It will expire in 5 minutes.`,
     });
 
