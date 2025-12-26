@@ -281,24 +281,27 @@ app.post("/send-otp", async (req, res) => {
   if (!email) return res.status(400).json({ error: "Email required" });
 
   const otp = Math.floor(100000 + Math.random() * 900000).toString();
-  const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 min expiry
+  const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
 
   try {
     await Otp.findOneAndUpdate(
       { email },
       { otp, expiresAt },
-      { upsert: true, new: true }
+      { upsert: true }
     );
-
-   const transporter = nodemailer.createTransport({
-      service: "gmail",
-      auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS },
-    });
-
+  const transporter = nodemailer.createTransport({
+  host: "smtp-relay.brevo.com",
+  port: 587,
+  secure: false, // TLS
+  auth: {
+    user: process.env.BREVO_SMTP_USER, // "apikey"
+    pass: process.env.BREVO_SMTP_PASS,
+  },
+});
     await transporter.sendMail({
-      from: `"MM TEAM" <${process.env.EMAIL_USER}>`,
+      from: `"MM TEAM" <${process.env.EMAIL_FROM}>`,
       to: email,
-      subject: "Your Melted Meethas Signup OTP",
+      subject: "Your Signup OTP",
       text: `Your OTP is ${otp}. It will expire in 5 minutes.`,
     });
 
@@ -308,7 +311,6 @@ app.post("/send-otp", async (req, res) => {
     res.status(500).json({ error: "Failed to send OTP" });
   }
 });
-
 
 app.post("/verify-otp", async (req, res) => {
   const { email, otp } = req.body;
