@@ -103,9 +103,7 @@ app.post('/login', async (req, res) => {
     res.status(500).json({ error: 'Internal server error' });
   }
 });
-app.get("/auth/me", authMiddleware, (req, res) => {
-  res.json(req.user); // middleware se user aata hai
-});
+
 app.get("/featured", async (req, res) => {
   try {
     const featured = await Product.find({ featured: true });
@@ -205,7 +203,9 @@ app.post("/cart/add", authMiddleware, async (req, res) => {
     res.status(500).json({ error: "Failed to add to cart" });
   }
 });
-
+app.get("/auth/me", authMiddleware, (req, res) => {
+  res.json(req.user); // middleware se user aata hai
+});
 
 app.get("/cart", authMiddleware, async (req, res) => {
   try {
